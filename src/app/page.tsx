@@ -89,19 +89,17 @@ export async function applyGreyFaceMask(image: HTMLImageElement): Promise<HTMLCa
 
   if (!detection) throw new Error('No face detected');
 
-  const lm = detection.landmarks;
+  const landmarks = detection.landmarks;
 
-  const mergePoints = (a: faceapi.Point[], b: faceapi.Point[]) => {
-    return [...a, ...b.reverse()];
-  };
+  // Sample a cheek point to get a skin color (cheek is around point index 3)
+  const cheekPoint = landmarks.positions[3];
+  const skinColor = sampleSkinColor(ctx, cheekPoint.x, cheekPoint.y);
 
-  const leftEyeRegion = mergePoints(lm.getLeftEye(), lm.getLeftEyeBrow());
-  const rightEyeRegion = mergePoints(lm.getRightEye(), lm.getRightEyeBrow());
+  // Get the full face contour
+  const faceContour = getFullFaceContour(landmarks);
 
-  eraseRegionSmart(ctx, leftEyeRegion, 1.5);
-  eraseRegionSmart(ctx, rightEyeRegion, 1.5);
-  eraseRegionSmart(ctx, lm.getNose(), 1.4);
-  eraseRegionSmart(ctx, lm.getMouth(), 1.5);
+  // Paint the full inside-face area with the sampled skin color
+  paintFaceWithSkinColor(ctx, faceContour, skinColor);
 
   return canvas;
 }
@@ -199,5 +197,3 @@ export default function Home() {
     </div>
   );
 }
-
-    
