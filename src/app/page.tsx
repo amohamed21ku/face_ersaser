@@ -5,6 +5,7 @@ import * as faceapi from 'face-api.js';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Eraser } from "lucide-react";
 
 export async function loadModels() {
   const MODEL_URL = '/models'
@@ -43,35 +44,59 @@ function paintFaceWithSkinColor(ctx: CanvasRenderingContext2D, contour: faceapi.
   ctx.restore();
 }
 
+function eraseRegionSmart(ctx: CanvasRenderingContext2D, points: faceapi.Point[], scaleFactor: number) {
+  if (points.length === 0) return;
+
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+
+  for (let i = 1; i < points.length; i++) {
+    ctx.lineTo(points[i].x, points[i].y);
+  }
+
+  ctx.closePath();
+
+  // Calculate the center of the region
+  let centerX = 0;
+  let centerY = 0;
+  for (const point of points) {
+    centerX += point.x;
+    centerY += point.y;
+  }
+  centerX /= points.length;
+  centerY /= points.length;
+
+  ctx.save();
+  ctx.translate(centerX, centerY);
+  ctx.scale(scaleFactor, scaleFactor);
+  ctx.translate(-centerX, -centerY);
+
+  ctx.clip();
+  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  ctx.restore();
+}
+
 export async function applyGreyFaceMask(image: HTMLImageElement): Promise<HTMLCanvasElement> {
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d')!;
-    canvas.width = image.width;
-    canvas.height = image.height;
-    ctx.drawImage(image, 0, 0);
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d')!;
+  canvas.width = image.width;
+  canvas.height = image.height;
+  ctx.drawImage(image, 0, 0);
 
-    const detection = await faceapi
-        .detectSingleFace(image, new faceapi.TinyFaceDetectorOptions())
-        .withFaceLandmarks();
+  const detection = await faceapi
+    .detectSingleFace(image, new faceapi.TinyFaceDetectorOptions())
+    .withFaceLandmarks();
 
-    if (!detection) throw new Error('No face detected');
+  if (!detection) throw new Error('No face detected');
 
-    const landmarks = detection.landmarks;
-    const contour = getFullFaceContour(landmarks);
+  const lm = detection.landmarks;
 
-    // Sample skin color from cheek
-    const cheekPoint = landmarks.positions[3] || { x: canvas.width / 2, y: canvas.height / 2 };
-    const skinColor = sampleSkinColor(ctx, cheekPoint.x, cheekPoint.y);
+  eraseRegionSmart(ctx, lm.getLeftEye(), 1.5);
+  eraseRegionSmart(ctx, lm.getRightEye(), 1.5);
+  eraseRegionSmart(ctx, lm.getNose(), 1.4);
+  eraseRegionSmart(ctx, lm.getMouth(), 1.5);
 
-    // Fill face with sampled skin color
-    paintFaceWithSkinColor(ctx, contour, skinColor);
-
-    // Draw gray rectangle over eyes, nose, mouth, and forehead
-    const box = detection.detection.box;
-    ctx.fillStyle = 'rgba(128, 128, 128, 0.8)'; // Grey with 80% opacity
-    ctx.fillRect(box.x, box.y, box.width, box.height * 0.7);
-
-    return canvas;
+  return canvas;
 }
 
 
@@ -159,11 +184,13 @@ export default function Home() {
               />
             </div>
           )}
-          <Button onClick={handleDownload} disabled={!maskedImage} style={{backgroundColor: '#008080', color: 'white'}}>
-            Download Masked Image
+          <Button onClick={handleDownload} disabled={!maskedImage} className="bg-primary text-primary-foreground hover:bg-primary/90">
+            Download Masked Image <Eraser className="ml-2 h-4 w-4" />
           </Button>
         </CardContent>
       </Card>
     </div>
   );
 }
+
+    
