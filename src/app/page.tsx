@@ -18,65 +18,36 @@ function sampleSkinColor(ctx: CanvasRenderingContext2D, x: number, y: number): s
   return `rgb(${pixel[0]}, ${pixel[1]}, ${pixel[2]})`;
 }
 function getFullFaceContour(landmarks: faceapi.FaceLandmarks68): faceapi.Point[] {
-  const jaw = landmarks.getJawOutline();
+  const jaw = landmarks.getJawOutline(); // bottom of the face
   const leftBrow = landmarks.getLeftEyeBrow();
   const rightBrow = landmarks.getRightEyeBrow();
 
-  // Estimate forehead curve from eyebrows
-  const forehead = [
-    ...leftBrow.map(p => ({ x: p.x, y: p.y - 50 })),
-    ...rightBrow.slice().reverse().map(p => ({ x: p.x, y: p.y - 50 }))
-  ];
+  // Estimate the forehead by extending upwards from the brows
+  const leftForehead = leftBrow.map(p => ({ x: p.x, y: p.y - 50 }));
+  const rightForehead = rightBrow.map(p => ({ x: p.x, y: p.y - 50 }));
 
-  return [...jaw, ...forehead];
+  const topContour = [...leftForehead, ...rightForehead.reverse()];
+  const fullContour = [...jaw, ...topContour.reverse()]; // ensure a proper closed loop
+
+  return fullContour;
 }
-
 function paintFaceWithSkinColor(ctx: CanvasRenderingContext2D, contour: faceapi.Point[], fillColor: string) {
   const region = new Path2D();
   region.moveTo(contour[0].x, contour[0].y);
-  contour.forEach(p => region.lineTo(p.x, p.y));
+  for (let i = 1; i < contour.length; i++) {
+    region.lineTo(contour[i].x, contour[i].y);
+  }
   region.closePath();
 
   ctx.save();
-  ctx.clip(region);
+  ctx.clip(region); // clip to the face region
   ctx.fillStyle = fillColor;
-  ctx.fill();
+  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height); // fill only within clip
   ctx.restore();
 }
+const skinToneGrey = 'rgb(200, 200, 200)'; // Light grey skin tone
 
-function eraseRegionSmart(ctx: CanvasRenderingContext2D, points: faceapi.Point[], scaleFactor: number) {
-  if (points.length === 0) return;
-
-  ctx.beginPath();
-  ctx.moveTo(points[0].x, points[0].y);
-
-  for (let i = 1; i < points.length; i++) {
-    ctx.lineTo(points[i].x, points[i].y);
-  }
-
-  ctx.closePath();
-
-  // Calculate the center of the region
-  let centerX = 0;
-  let centerY = 0;
-  for (const point of points) {
-    centerX += point.x;
-    centerY += point.y;
-  }
-  centerX /= points.length;
-  centerY /= points.length;
-
-  ctx.save();
-  ctx.translate(centerX, centerY);
-  ctx.scale(scaleFactor, scaleFactor);
-  ctx.translate(-centerX, -centerY);
-
-  ctx.clip();
-  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-  ctx.restore();
-}
-
-export async function applyGreyFaceMask(image: HTMLImageElement): Promise<HTMLCanvasElement> {
+export async function applyGreyFaceMask(image: HTMLImageElement): Promise<{ canvas: HTMLCanvasElement, skinColor: string }> {
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d')!;
   canvas.width = image.width;
@@ -91,17 +62,31 @@ export async function applyGreyFaceMask(image: HTMLImageElement): Promise<HTMLCa
 
   const landmarks = detection.landmarks;
 
-  // Sample a cheek point to get a skin color (cheek is around point index 3)
-  const cheekPoint = landmarks.positions[3];
-  const skinColor = sampleSkinColor(ctx, cheekPoint.x, cheekPoint.y);
+  const cheekPoints = [
+    landmarks.positions[3],  // Cheek
+    landmarks.positions[43], // Outer corner of right eye
+    landmarks.positions[46]   // Outer corner of left eye
+  ];
 
-  // Get the full face contour
-  const faceContour = getFullFaceContour(landmarks);
+  // Get average skin tone from multiple points
+  let total = 0;
+  for (const point of cheekPoints) {
+    const pixel = ctx.getImageData(point.x, point.y, 1, 1).data;
+    total += (pixel[0] + pixel[1] + pixel[2]) / 3; // Avg of R, G, B
+  }
 
-  // Paint the full inside-face area with the sampled skin color
-  paintFaceWithSkinColor(ctx, faceContour, skinColor);
+  // Sample skin tone from cheek (or fallback center)
+  const baseTone = Math.round(total / cheekPoints.length);
+  const skinColorString = `rgb(${baseTone}, ${baseTone}, ${baseTone})`;
+ctx.strokeStyle = skinColor;
 
-  return canvas;
+  const fullFaceContour = getFullFaceContour(landmarks);
+
+  paintFaceWithSkinColor(ctx, fullFaceContour, skinColorString);
+  ctx.fillStyle = skinColorString;
+
+
+  return { canvas, skinColor: skinColorString };
 }
 
 
@@ -110,6 +95,8 @@ export default function Home() {
   const [maskedImage, setMaskedImage] = useState<string | null>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [skinColor, setSkinColor] = useState<string>(skinToneGrey);
+
 
   useEffect(() => {
     const load = async () => {
@@ -134,8 +121,9 @@ export default function Home() {
       if (imageRef.current) {
         imageRef.current.onload = async () => {
           try {
-            const maskedCanvas = await applyGreyFaceMask(imageRef.current as HTMLImageElement);
-            setMaskedImage(maskedCanvas.toDataURL());
+            const { canvas, skinColor } = await applyGreyFaceMask(imageRef.current as HTMLImageElement);
+            setMaskedImage(canvas.toDataURL('image/png'));
+            setSkinColor(skinColor); // <-- Save the sampled skin color
           } catch (error: any) {
             console.error("Error applying mask:", error);
             alert(error.message);
@@ -153,7 +141,7 @@ export default function Home() {
       link.download = "masked_image.png";
       document.body.appendChild(link);
       link.click();
-      document.body.removeChild(link);
+      link.body.removeChild(link);
     }
   };
 
@@ -197,3 +185,4 @@ export default function Home() {
     </div>
   );
 }
+
