@@ -5,54 +5,62 @@ import * as faceapi from 'face-api.js';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Slider } from "@/components/ui/slider";
 import { Eraser } from "lucide-react";
+import { toast } from "@/hooks/use-toast";
 
 export async function loadModels() {
-  const MODEL_URL = '/models'
-  await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL)
-  await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL)
+  const MODEL_URL = '/models';
+  await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+  await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
 }
 
 function sampleSkinColor(ctx: CanvasRenderingContext2D, x: number, y: number): string {
   const pixel = ctx.getImageData(x, y, 1, 1).data;
   return `rgb(${pixel[0]}, ${pixel[1]}, ${pixel[2]})`;
 }
+
 function getFullFaceContour(landmarks: faceapi.FaceLandmarks68): faceapi.Point[] {
-  const jaw = landmarks.getJawOutline(); // bottom of the face
+  const jaw = landmarks.getJawOutline();
   const leftBrow = landmarks.getLeftEyeBrow();
   const rightBrow = landmarks.getRightEyeBrow();
-
-  // Estimate the forehead by extending upwards from the brows
   const leftForehead = leftBrow.map(p => ({ x: p.x, y: p.y - 50 }));
   const rightForehead = rightBrow.map(p => ({ x: p.x, y: p.y - 50 }));
-
   const topContour = [...leftForehead, ...rightForehead.reverse()];
-  const fullContour = [...jaw, ...topContour.reverse()]; // ensure a proper closed loop
-
+  const fullContour = [...jaw, ...topContour.reverse()];
   return fullContour;
 }
-function paintFaceWithSkinColor(ctx: CanvasRenderingContext2D, contour: faceapi.Point[], fillColor: string) {
-  const region = new Path2D();
-  region.moveTo(contour[0].x, contour[0].y);
-  for (let i = 1; i < contour.length; i++) {
-    region.lineTo(contour[i].x, contour[i].y);
-  }
-  region.closePath();
 
+function paintFaceWithSkinColor(ctx: CanvasRenderingContext2D, contour: faceapi.Point[], fillColor: string) {
   ctx.save();
-  ctx.clip(region); // clip to the face region
+  ctx.beginPath();
+  ctx.moveTo(contour[0].x, contour[0].y);
+  contour.forEach(p => ctx.lineTo(p.x, p.y));
+  ctx.closePath();
+  ctx.clip();
   ctx.fillStyle = fillColor;
-  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height); // fill only within clip
+  ctx.fill();
   ctx.restore();
 }
-const skinToneGrey = 'rgb(200, 200, 200)'; // Light grey skin tone
 
-export async function applyGreyFaceMask(image: HTMLImageElement): Promise<{ canvas: HTMLCanvasElement, skinColor: string }> {
+export async function applyGreyFaceMask(image: HTMLImageElement): Promise<{ canvas: HTMLCanvasElement; skinColor: string }> {
   const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d')!;
   canvas.width = image.width;
   canvas.height = image.height;
+  const ctx = canvas.getContext('2d')!;
   ctx.drawImage(image, 0, 0);
+
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imageData.data;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+    data[i] = avg;        // red
+    data[i + 1] = avg;    // green
+    data[i + 2] = avg;    // blue
+  }
+
+  ctx.putImageData(imageData, 0, 0);
 
   const detection = await faceapi
     .detectSingleFace(image, new faceapi.TinyFaceDetectorOptions())
@@ -62,127 +70,240 @@ export async function applyGreyFaceMask(image: HTMLImageElement): Promise<{ canv
 
   const landmarks = detection.landmarks;
 
-  const cheekPoints = [
-    landmarks.positions[3],  // Cheek
-    landmarks.positions[43], // Outer corner of right eye
-    landmarks.positions[46]   // Outer corner of left eye
-  ];
-
-  // Get average skin tone from multiple points
+  const cheekPoints = [landmarks.positions[3], landmarks.positions[13]];
   let total = 0;
-  for (const point of cheekPoints) {
-    const pixel = ctx.getImageData(point.x, point.y, 1, 1).data;
-    total += (pixel[0] + pixel[1] + pixel[2]) / 3; // Avg of R, G, B
+  for (const p of cheekPoints) {
+    const x = Math.round(p.x);
+    const y = Math.round(p.y);
+    const idx = (y * canvas.width + x) * 4;
+    total += data[idx];
   }
-
-  // Sample skin tone from cheek (or fallback center)
   const baseTone = Math.round(total / cheekPoints.length);
   const skinColorString = `rgb(${baseTone}, ${baseTone}, ${baseTone})`;
-ctx.strokeStyle = skinColor;
 
-  const fullFaceContour = getFullFaceContour(landmarks);
+  const jaw = landmarks.getJawOutline();
+  const leftBrow = landmarks.getLeftEyeBrow().map(p => ({ x: p.x, y: p.y - 60 }));
+  const rightBrow = landmarks.getRightEyeBrow().map(p => ({ x: p.x, y: p.y - 60 }));
+  const faceRegion = [...leftBrow, ...rightBrow.reverse(), ...jaw.reverse()];
 
-  paintFaceWithSkinColor(ctx, fullFaceContour, skinColorString);
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(faceRegion[0].x, faceRegion[0].y);
+  faceRegion.forEach(p => ctx.lineTo(p.x, p.y));
+  ctx.closePath();
+  ctx.clip();
+
   ctx.fillStyle = skinColorString;
-
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.restore();
 
   return { canvas, skinColor: skinColorString };
 }
 
+const skinToneGrey = "#D3D3D3";
 
 export default function Home() {
-  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [image, setImage] = useState<string | null>(null);
   const [maskedImage, setMaskedImage] = useState<string | null>(null);
-  const imageRef = useRef<HTMLImageElement>(null);
+  const [brushSize, setBrushSize] = useState<number>(10);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [drawing, setDrawing] = useState(false);
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const [skinColor, setSkinColor] = useState<string>(skinToneGrey);
-
 
   useEffect(() => {
     const load = async () => {
-      await loadModels();
-    }
+      setIsLoading(true);
+      try {
+        await loadModels();
+      } catch (error) {
+        console.error("Failed to load face-api models:", error);
+        toast({
+          title: "Error",
+          description: 'Failed to load face detection models. Please check the console for details.',
+          variant: "destructive",
+        });
+      } finally {
+        setIsLoading(false);
+      }
+    };
     load();
   }, []);
 
-  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setSelectedImage(reader.result as string);
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      const imgDataUrl = reader.result as string;
+      setImage(imgDataUrl);
+
+      const image = new Image();
+      image.src = imgDataUrl;
+      image.onload = async () => {
+        setIsLoading(true);
+        try {
+          const { canvas, skinColor } = await applyGreyFaceMask(image);
+          setMaskedImage(canvas.toDataURL('image/png'));
+          setSkinColor(skinColor);
+
+          if (overlayCanvasRef.current) {
+            const overlayCtx = overlayCanvasRef.current.getContext('2d');
+            if (overlayCtx) {
+              overlayCanvasRef.current.width = canvas.width;
+              overlayCanvasRef.current.height = canvas.height;
+              overlayCtx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+          }
+        } catch (error: any) {
+          console.error("Face detection or masking failed:", error);
+          toast({
+            title: "Error",
+            description: `Face detection or masking failed: ${error.message}`,
+            variant: "destructive",
+          });
+          setMaskedImage(null);
+        } finally {
+          setIsLoading(false);
+        }
       };
-      reader.readAsDataURL(file);
-    }
+      image.onerror = () => {
+        console.error("Failed to load image");
+        toast({
+          title: "Error",
+          description: 'Failed to load image.',
+          variant: "destructive",
+        });
+        setIsLoading(false);
+      };
+    };
+    reader.readAsDataURL(file);
   };
 
-  useEffect(() => {
-    if (selectedImage) {
-      if (imageRef.current) {
-        imageRef.current.onload = async () => {
-          try {
-            const { canvas, skinColor } = await applyGreyFaceMask(imageRef.current as HTMLImageElement);
-            setMaskedImage(canvas.toDataURL('image/png'));
-            setSkinColor(skinColor); // <-- Save the sampled skin color
-          } catch (error: any) {
-            console.error("Error applying mask:", error);
-            alert(error.message);
-          }
-        };
-        imageRef.current.src = selectedImage;
-      }
-    }
-  }, [selectedImage]);
-
   const handleDownload = () => {
-    if (maskedImage && canvasRef.current) {
-      const link = document.createElement("a");
-      link.href = maskedImage;
-      link.download = "masked_image.png";
-      document.body.appendChild(link);
-      link.click();
-      link.body.removeChild(link);
+    if (!maskedImage) {
+      toast({
+        title: "Warning",
+        description: "No masked image available to download.",
+      });
+      return;
     }
+
+    const a = document.createElement('a');
+    a.href = maskedImage;
+    a.download = 'masked_face.png';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    setDrawing(true);
+    const canvas = overlayCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.lineWidth = brushSize;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = skinColor;
+
+    ctx.beginPath();
+    ctx.moveTo(e.nativeEvent.offsetX, e.nativeEvent.offsetY);
+  };
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!drawing) return;
+    const canvas = overlayCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.lineTo(e.nativeEvent.offsetX, e.nativeEvent.offsetY);
+    ctx.stroke();
+  };
+
+  const handleMouseUp = () => {
+    setDrawing(false);
+  };
+
+  const handleMouseLeave = () => {
+    setDrawing(false);
   };
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen py-2">
-      <Card className="w-full max-w-md space-y-4 p-4">
+    <div className="flex flex-col items-center justify-center min-h-screen p-4">
+      <Card className="w-full max-w-md space-y-4">
         <CardHeader>
           <CardTitle>Face Veil</CardTitle>
           <CardDescription>
-            Upload an image to apply a grey face mask.
+            Upload an image to apply a monochrome face mask and customize it with a brush.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <Input type="file" accept="image/*" onChange={handleImageUpload} />
-          {selectedImage && (
-            <div className="flex justify-center">
-              <img
-                src={selectedImage}
-                alt="Uploaded"
-                style={{ maxWidth: '100%', maxHeight: '300px' }}
-                ref={imageRef}
-                className="hidden"
-              />
+
+          {image && (
+            <div className="relative flex justify-center">
+              {isLoading ? (
+                <div className="text-muted-foreground">Processing...</div>
+              ) : maskedImage ? (
+                <div style={{ position: 'relative' }}>
+                  <img
+                    src={maskedImage}
+                    alt="Monochrome Masked Face"
+                    className="rounded-md border"
+                    style={{ maxWidth: '100%', maxHeight: '300px' }}
+                  />
+                  <canvas
+                    ref={overlayCanvasRef}
+                    width={imageRef.current?.width || 0}
+                    height={imageRef.current?.height || 0}
+                    onMouseDown={handleMouseDown}
+                    onMouseMove={handleMouseMove}
+                    onMouseUp={handleMouseUp}
+                    onMouseLeave={handleMouseLeave}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      pointerEvents: 'auto',
+                      maxWidth: '100%',
+                      maxHeight: '300px',
+                      imageRendering: 'pixelated',
+                    }}
+                    className="rounded-md"
+                  />
+                </div>
+              ) : (
+                <div className="text-muted-foreground">Face detection failed.</div>
+              )}
             </div>
           )}
-          {maskedImage && (
-            <div className="flex justify-center">
-              <canvas ref={canvasRef} style={{ maxWidth: '100%', maxHeight: '300px' }} />
-              <img
-                src={maskedImage}
-                alt="Masked"
-                style={{ maxWidth: '100%', maxHeight: '300px' }}
+
+          <div className="flex flex-col space-y-2">
+            <div className="flex items-center space-x-2">
+              <label htmlFor="brushSize" className="text-sm font-medium">Brush Size:</label>
+              <Slider
+                id="brushSize"
+                min={1}
+                max={50}
+                step={1}
+                defaultValue={[brushSize]}
+                onValueChange={(value) => setBrushSize(value[0])}
+                className="w-24"
               />
+              <span className="text-sm">{brushSize}</span>
             </div>
-          )}
-          <Button onClick={handleDownload} disabled={!maskedImage} className="bg-primary text-primary-foreground hover:bg-primary/90">
-            Download Masked Image <Eraser className="ml-2 h-4 w-4" />
-          </Button>
+            <Button onClick={handleDownload} disabled={!maskedImage} className="bg-accent text-accent-foreground hover:bg-accent/80">
+              Download Image <Eraser className="ml-2 h-4 w-4" />
+            </Button>
+          </div>
         </CardContent>
       </Card>
     </div>
   );
 }
-
