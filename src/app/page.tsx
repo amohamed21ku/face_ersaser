@@ -91,8 +91,15 @@ export async function applyGreyFaceMask(image: HTMLImageElement): Promise<HTMLCa
 
   const lm = detection.landmarks;
 
-  eraseRegionSmart(ctx, lm.getLeftEye(), 1.5);
-  eraseRegionSmart(ctx, lm.getRightEye(), 1.5);
+  const mergePoints = (a: faceapi.Point[], b: faceapi.Point[]) => {
+    return [...a, ...b.reverse()];
+  };
+
+  const leftEyeRegion = mergePoints(lm.getLeftEye(), lm.getLeftEyeBrow());
+  const rightEyeRegion = mergePoints(lm.getRightEye(), lm.getRightEyeBrow());
+
+  eraseRegionSmart(ctx, leftEyeRegion, 1.5);
+  eraseRegionSmart(ctx, rightEyeRegion, 1.5);
   eraseRegionSmart(ctx, lm.getNose(), 1.4);
   eraseRegionSmart(ctx, lm.getMouth(), 1.5);
 
