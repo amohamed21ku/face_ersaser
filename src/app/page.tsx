@@ -13,6 +13,29 @@ export async function loadModels() {
   await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
 }
 
+function eraseRegionSmart(ctx: CanvasRenderingContext2D, points: faceapi.Point[], scaleFactor: number = 1) {
+  if (!points || points.length < 2) return;
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'destination-out'; // This is key for erasing
+
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+
+  for (let i = 1; i < points.length; i++) {
+    ctx.lineTo(points[i].x, points[i].y);
+  }
+
+  ctx.closePath();
+
+  // Scale the erasing region slightly to ensure full coverage
+  ctx.lineWidth = 2 * scaleFactor; // Adjust for more robust erasing
+  ctx.stroke();
+  ctx.fill();
+
+  ctx.restore();
+}
+
 export async function applyGreyFaceMask(image: HTMLImageElement): Promise<{ canvas: HTMLCanvasElement, skinColor: string }> {
   const canvas = document.createElement('canvas');
   canvas.width = image.width;
@@ -20,8 +43,13 @@ export async function applyGreyFaceMask(image: HTMLImageElement): Promise<{ canv
   const ctx = canvas.getContext('2d')!;
   ctx.drawImage(image, 0, 0);
 
-  const originalImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const originalData = originalImageData.data;
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imageData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+    data[i] = data[i + 1] = data[i + 2] = avg;
+  }
+  ctx.putImageData(imageData, 0, 0);
 
   const detection = await faceapi
     .detectSingleFace(image, new faceapi.TinyFaceDetectorOptions())
@@ -31,23 +59,17 @@ export async function applyGreyFaceMask(image: HTMLImageElement): Promise<{ canv
 
   const lm = detection.landmarks;
 
-  // Step 1: Sample skin tone before grayscale
   const cheekPoints = [lm.positions[3], lm.positions[13]];
-  let rSum = 0, gSum = 0, bSum = 0;
+  let total = 0;
   for (const p of cheekPoints) {
     const x = Math.round(p.x);
     const y = Math.round(p.y);
     const idx = (y * canvas.width + x) * 4;
-    rSum += originalData[idx];
-    gSum += originalData[idx + 1];
-    bSum += originalData[idx + 2];
+    total += data[idx];
   }
-  const avgR = Math.round(rSum / cheekPoints.length);
-  const avgG = Math.round(gSum / cheekPoints.length);
-  const avgB = Math.round(bSum / cheekPoints.length);
-  const skinColorString = `rgb(${avgR}, ${avgG}, ${avgB})`;
+  const baseTone = Math.round(total / cheekPoints.length);
+  const skinColorString = `rgb(${baseTone}, ${baseTone}, ${baseTone})`;
 
-  // Step 2: Draw mask with skin tone
   const jaw = lm.getJawOutline();
   const leftBrow = lm.getLeftEyeBrow().map(p => ({ x: p.x, y: p.y - 60 }));
   const rightBrow = lm.getRightEyeBrow().map(p => ({ x: p.x, y: p.y - 60 }));
@@ -63,15 +85,17 @@ export async function applyGreyFaceMask(image: HTMLImageElement): Promise<{ canv
   ctx.fillStyle = skinColorString;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.restore();
+   const mergePoints = (a: faceapi.Point[], b: faceapi.Point[]) => {
+    return [...a, ...b.reverse()];
+  };
 
-  // Step 3: Now convert everything to grayscale
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const data = imageData.data;
-  for (let i = 0; i < data.length; i += 4) {
-    const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
-    data[i] = data[i + 1] = data[i + 2] = avg;
-  }
-  ctx.putImageData(imageData, 0, 0);
+  const leftEyeRegion = mergePoints(lm.getLeftEye(), lm.getLeftEyeBrow());
+  const rightEyeRegion = mergePoints(lm.getRightEye(), lm.getRightEyeBrow());
+
+  eraseRegionSmart(ctx, leftEyeRegion, 1.5);
+  eraseRegionSmart(ctx, rightEyeRegion, 1.5);
+   eraseRegionSmart(ctx, lm.getNose(), 1.4);
+  eraseRegionSmart(ctx, lm.getMouth(), 1.5);
 
   return { canvas, skinColor: skinColorString };
 }
@@ -129,6 +153,7 @@ export default function Home() {
             if (overlayCtx) {
               overlayCanvasRef.current.width = canvas.width;
               overlayCanvasRef.current.height = canvas.height;
+               drawOverlayText(overlayCanvasRef.current);
             }
           }
         } catch (error: any) {
@@ -200,6 +225,16 @@ export default function Home() {
   const handleMouseLeave = () => {
     setDrawing(false);
   };
+   function drawOverlayText(canvas: HTMLCanvasElement) {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const text = "EVERYTHING WILL BE TAKEN AWAY";
+    ctx.font = "bold 28px Arial";
+    ctx.fillStyle = "darkred";
+    ctx.textAlign = "center";
+    ctx.fillText(text, canvas.width / 2, 40); // 40px from top
+  }
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen p-4 bg-background text-foreground">
