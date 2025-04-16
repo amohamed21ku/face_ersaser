@@ -4,8 +4,8 @@ import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Slider } from "@/components/ui/slider";
 import * as faceapi from 'face-api.js';
+import { motion } from "framer-motion";
 
 export async function loadModels() {
   const MODEL_URL = '/models';
@@ -17,8 +17,7 @@ function eraseRegionSmart(ctx: CanvasRenderingContext2D, points: faceapi.Point[]
   if (!points || points.length < 2) return;
 
   ctx.save();
-  ctx.globalCompositeOperation = 'destination-out'; // This is key for erasing
-
+  ctx.globalCompositeOperation = 'destination-out';
   ctx.beginPath();
   ctx.moveTo(points[0].x, points[0].y);
 
@@ -27,9 +26,7 @@ function eraseRegionSmart(ctx: CanvasRenderingContext2D, points: faceapi.Point[]
   }
 
   ctx.closePath();
-
-  // Scale the erasing region slightly to ensure full coverage
-  ctx.lineWidth = 2 * scaleFactor; // Adjust for more robust erasing
+  ctx.lineWidth = 2 * scaleFactor;
   ctx.stroke();
   ctx.fill();
 
@@ -54,7 +51,6 @@ export async function applyGreyFaceMask(image: HTMLImageElement): Promise<{ canv
 
   const lm = detection.landmarks;
 
-  // Step 1: Sample skin tone before grayscale
   const cheekPoints = [lm.positions[3], lm.positions[13]];
   let rSum = 0, gSum = 0, bSum = 0;
   for (const p of cheekPoints) {
@@ -70,7 +66,6 @@ export async function applyGreyFaceMask(image: HTMLImageElement): Promise<{ canv
   const avgB = Math.round(bSum / cheekPoints.length);
   const skinColorString = `rgb(${avgR}, ${avgG}, ${avgB})`;
 
-  // Step 2: Draw mask with skin tone
   const jaw = lm.getJawOutline();
   const leftBrow = lm.getLeftEyeBrow().map(p => ({ x: p.x, y: p.y - 60 }));
   const rightBrow = lm.getRightEyeBrow().map(p => ({ x: p.x, y: p.y - 60 }));
@@ -86,15 +81,6 @@ export async function applyGreyFaceMask(image: HTMLImageElement): Promise<{ canv
   ctx.fillStyle = skinColorString;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.restore();
-
-  // Step 3: Now convert everything to grayscale
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const data = imageData.data;
-  for (let i = 0; i < data.length; i += 4) {
-    const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
-    data[i] = data[i + 1] = data[i + 2] = avg;
-  }
-  ctx.putImageData(imageData, 0, 0);
 
   const mergePoints = (a: faceapi.Point[], b: faceapi.Point[]) => {
     return [...a, ...b.reverse()];
@@ -115,15 +101,9 @@ const skinToneGrey = "#D3D3D3";
 
 export default function Home() {
   const [image, setImage] = useState<string | null>(null);
-  const [bwImage, setBwImage] = useState<string | null>(null);
-  const [brushSize, setBrushSize] = useState<number>(10);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const imageRef = useRef<HTMLImageElement>(null);
   const [maskedImage, setMaskedImage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [drawing, setDrawing] = useState(false);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
-  const [overlayImage, setOverlayImage] = useState<string | null>(null);
   const [skinColor, setSkinColor] = useState<string>(skinToneGrey);
 
   useEffect(() => {
@@ -164,7 +144,7 @@ export default function Home() {
             if (overlayCtx) {
               overlayCanvasRef.current.width = canvas.width;
               overlayCanvasRef.current.height = canvas.height;
-               drawOverlayText(overlayCanvasRef.current);
+              drawOverlayText(overlayCanvasRef.current);
             }
           }
         } catch (error: any) {
@@ -198,45 +178,7 @@ export default function Home() {
     document.body.removeChild(a);
   };
 
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    setDrawing(true);
-    const canvas = overlayCanvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    ctx.lineWidth = brushSize;
-    ctx.lineCap = 'round';
-    ctx.strokeStyle = skinColor;
-
-    const x = e.nativeEvent.offsetX;
-    const y = e.nativeEvent.offsetY;
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-  };
-
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!drawing) return;
-    const canvas = overlayCanvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const x = e.nativeEvent.offsetX;
-    const y = e.nativeEvent.offsetY;
-    ctx.lineTo(x, y);
-    ctx.stroke();
-    setOverlayImage(canvas.toDataURL('image/png'));
-  };
-
-  const handleMouseUp = () => {
-    setDrawing(false);
-  };
-
-  const handleMouseLeave = () => {
-    setDrawing(false);
-  };
-   function drawOverlayText(canvas: HTMLCanvasElement) {
+  function drawOverlayText(canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
@@ -244,16 +186,34 @@ export default function Home() {
     ctx.font = "bold 28px Arial";
     ctx.fillStyle = "darkred";
     ctx.textAlign = "center";
-    ctx.fillText(text, canvas.width / 2, 40); // 40px from top
+    ctx.fillText(text, canvas.width / 2, 40);
   }
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen p-4 bg-background text-foreground">
-      <Card className="w-full max-w-2xl bg-card text-card-foreground shadow-md rounded-lg">
+    <div className="relative flex flex-col items-center justify-center min-h-screen px-4 py-8 bg-black text-white overflow-hidden">
+      <motion.h1
+        initial={{ opacity: 0, y: -30 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 1.2 }}
+        className="text-4xl md:text-5xl font-bold text-red-900 tracking-widest uppercase mb-4 text-center z-10"
+      >
+        EVERYTHING WILL BE TAKEN AWAY
+      </motion.h1>
+
+      <motion.p
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 1.5, duration: 1 }}
+        className="text-center text-sm max-w-xl text-gray-300 italic mb-6 z-10"
+      >
+        “The transformation of silence into language and action is an act of self-revelation.”
+      </motion.p>
+
+      <Card className="w-full max-w-2xl bg-neutral-900 text-white shadow-2xl border border-red-900 z-10">
         <CardHeader className="flex flex-col items-center space-y-2">
-          <CardTitle className="text-2xl font-semibold tracking-tight">EVERYTHING WILL BE TAKEN AWAY</CardTitle>
-          <CardDescription className="text-sm text-muted-foreground">
-            Upload an image, convert it to black and white, and mask the facial features inspired by Adrian Piper's artwork.
+          <CardTitle className="text-2xl font-semibold tracking-tight">Monochrome Mask</CardTitle>
+          <CardDescription className="text-sm text-gray-400">
+            Upload an image, convert it to black and white, and mask the facial features.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col items-center space-y-4">
@@ -272,10 +232,6 @@ export default function Home() {
                   <img src={maskedImage} alt="Monochrome Masked Face" className="border border-border rounded-md shadow-sm" />
                   <canvas
                     ref={overlayCanvasRef}
-                    onMouseDown={handleMouseDown}
-                    onMouseMove={handleMouseMove}
-                    onMouseUp={handleMouseUp}
-                    onMouseLeave={handleMouseLeave}
                     style={{
                       position: 'absolute',
                       top: 0,
@@ -293,26 +249,27 @@ export default function Home() {
             )}
           </div>
 
-          <div className="w-full flex flex-col sm:flex-row items-center justify-between space-y-2 sm:space-y-0 sm:space-x-4">
-            <Button onClick={handleDownload} disabled={!maskedImage} className="bg-teal-500 text-teal-50 hover:bg-teal-700">
-              Download Image
-            </Button>
-            <div className="flex items-center space-x-2">
-              <label htmlFor="brushSize" className="text-sm font-medium">Brush Size:</label>
-              <Slider
-                id="brushSize"
-                min={1}
-                max={50}
-                step={1}
-                defaultValue={[brushSize]}
-                onValueChange={(value) => setBrushSize(value[0])}
-                className="w-24"
-              />
-              <span className="text-sm">{brushSize}</span>
-            </div>
-          </div>
+          <Button onClick={handleDownload} disabled={!maskedImage} className="bg-red-700 text-white hover:bg-red-800">
+            Download Image
+          </Button>
         </CardContent>
       </Card>
+
+      <motion.div
+        animate={{ y: [0, -20, 0] }}
+        transition={{ duration: 8, repeat: Infinity }}
+        className="absolute bottom-12 text-sm text-gray-600 opacity-30 text-center max-w-xs mx-auto"
+      >
+        “Pretend things are different.”
+      </motion.div>
+
+      <motion.div
+        animate={{ y: [0, 20, 0] }}
+        transition={{ duration: 10, repeat: Infinity }}
+        className="absolute top-20 right-20 text-sm text-gray-500 opacity-40"
+      >
+        "The future is here now, but it's not evenly distributed."
+      </motion.div>
     </div>
   );
 }
