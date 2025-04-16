@@ -43,13 +43,8 @@ export async function applyGreyFaceMask(image: HTMLImageElement): Promise<{ canv
   const ctx = canvas.getContext('2d')!;
   ctx.drawImage(image, 0, 0);
 
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const data = imageData.data;
-  for (let i = 0; i < data.length; i += 4) {
-    const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
-    data[i] = data[i + 1] = data[i + 2] = avg;
-  }
-  ctx.putImageData(imageData, 0, 0);
+  const originalImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const originalData = originalImageData.data;
 
   const detection = await faceapi
     .detectSingleFace(image, new faceapi.TinyFaceDetectorOptions())
@@ -59,17 +54,23 @@ export async function applyGreyFaceMask(image: HTMLImageElement): Promise<{ canv
 
   const lm = detection.landmarks;
 
+  // Step 1: Sample skin tone before grayscale
   const cheekPoints = [lm.positions[3], lm.positions[13]];
-  let total = 0;
+  let rSum = 0, gSum = 0, bSum = 0;
   for (const p of cheekPoints) {
     const x = Math.round(p.x);
     const y = Math.round(p.y);
     const idx = (y * canvas.width + x) * 4;
-    total += data[idx];
+    rSum += originalData[idx];
+    gSum += originalData[idx + 1];
+    bSum += originalData[idx + 2];
   }
-  const baseTone = Math.round(total / cheekPoints.length);
-  const skinColorString = `rgb(${baseTone}, ${baseTone}, ${baseTone})`;
+  const avgR = Math.round(rSum / cheekPoints.length);
+  const avgG = Math.round(gSum / cheekPoints.length);
+  const avgB = Math.round(bSum / cheekPoints.length);
+  const skinColorString = `rgb(${avgR}, ${avgG}, ${avgB})`;
 
+  // Step 2: Draw mask with skin tone
   const jaw = lm.getJawOutline();
   const leftBrow = lm.getLeftEyeBrow().map(p => ({ x: p.x, y: p.y - 60 }));
   const rightBrow = lm.getRightEyeBrow().map(p => ({ x: p.x, y: p.y - 60 }));
@@ -85,7 +86,17 @@ export async function applyGreyFaceMask(image: HTMLImageElement): Promise<{ canv
   ctx.fillStyle = skinColorString;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.restore();
-   const mergePoints = (a: faceapi.Point[], b: faceapi.Point[]) => {
+
+  // Step 3: Now convert everything to grayscale
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imageData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+    data[i] = data[i + 1] = data[i + 2] = avg;
+  }
+  ctx.putImageData(imageData, 0, 0);
+
+  const mergePoints = (a: faceapi.Point[], b: faceapi.Point[]) => {
     return [...a, ...b.reverse()];
   };
 
@@ -94,7 +105,7 @@ export async function applyGreyFaceMask(image: HTMLImageElement): Promise<{ canv
 
   eraseRegionSmart(ctx, leftEyeRegion, 1.5);
   eraseRegionSmart(ctx, rightEyeRegion, 1.5);
-   eraseRegionSmart(ctx, lm.getNose(), 1.4);
+  eraseRegionSmart(ctx, lm.getNose(), 1.4);
   eraseRegionSmart(ctx, lm.getMouth(), 1.5);
 
   return { canvas, skinColor: skinColorString };
@@ -240,9 +251,9 @@ export default function Home() {
     <div className="flex flex-col items-center justify-center min-h-screen p-4 bg-background text-foreground">
       <Card className="w-full max-w-2xl bg-card text-card-foreground shadow-md rounded-lg">
         <CardHeader className="flex flex-col items-center space-y-2">
-          <CardTitle className="text-2xl font-semibold tracking-tight">Monochrome Mask</CardTitle>
+          <CardTitle className="text-2xl font-semibold tracking-tight">EVERYTHING WILL BE TAKEN AWAY</CardTitle>
           <CardDescription className="text-sm text-muted-foreground">
-            Upload an image, convert it to black and white, and mask the facial features.
+            Upload an image, convert it to black and white, and mask the facial features inspired by Adrian Piper's artwork.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col items-center space-y-4">
