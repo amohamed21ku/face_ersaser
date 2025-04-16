@@ -8,6 +8,9 @@ const nextConfig: NextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
+  output: 'export',
+  basePath: '', // Ensure no base path is used
+  trailingSlash: true,
 };
 
 export default nextConfig;
