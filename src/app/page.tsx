@@ -244,7 +244,7 @@ export default function Home() {
           <CardHeader className="flex flex-col items-center space-y-2 border-b border-zinc-800">
             <CardTitle className="text-2xl font-semibold tracking-tight">Piper's Effect</CardTitle>
             <CardDescription className="text-sm text-gray-400">
-              Upload an image, convert it to black and white, and mask the facial features
+              
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col items-center space-y-6 p-6">
