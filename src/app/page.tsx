@@ -6,6 +6,26 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import * as faceapi from 'face-api.js';
 import { motion } from "framer-motion";
+import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { getFirestore, collection, addDoc, serverTimestamp, onSnapshot, query, orderBy } from "firebase/firestore";
+import { initializeApp } from "firebase/app";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+
+// Firebase configuration
+const firebaseConfig = {
+  apiKey: "AIzaSyD0eyX6bAMBNt5fd1ZDOYW7G903AYosZk4",
+  authDomain: "face-veil.firebaseapp.com",
+  projectId: "face-veil",
+  storageBucket: "face-veil.firebasestorage.app",
+  messagingSenderId: "834940908059",
+  appId: "1:834940908059:web:f9e375e78afb76bda53ebe"
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const storage = getStorage(app);
+const db = getFirestore(app);
 
 export async function loadModels() {
   const MODEL_URL = '/models';
@@ -100,8 +120,10 @@ export default function Home() {
   const [image, setImage] = useState<string | null>(null);
   const [maskedImage, setMaskedImage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isSharing, setIsSharing] = useState<boolean>(false);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const [skinColor, setSkinColor] = useState<string>(skinToneGrey);
+  const router = useRouter();
 
   useEffect(() => {
     const load = async () => {
@@ -159,6 +181,39 @@ export default function Home() {
       };
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleShare = async () => {
+    if (!maskedImage) return;
+    
+    setIsSharing(true);
+    try {
+      // Convert data URL to blob
+      const response = await fetch(maskedImage);
+      const blob = await response.blob();
+      
+      // Create a unique filename
+      const filename = `masked_${Date.now()}.png`;
+      const storageRef = ref(storage, `images/${filename}`);
+      
+      // Upload to Firebase Storage
+      const snapshot = await uploadBytes(storageRef, blob);
+      const downloadURL = await getDownloadURL(snapshot.ref);
+      
+      // Add to Firestore
+      await addDoc(collection(db, "images"), {
+        image_url: downloadURL,
+        created_at: serverTimestamp()
+      });
+      
+      toast.success("Image shared successfully!");
+      router.push("/gallery");
+    } catch (error) {
+      console.error("Error sharing image:", error);
+      toast.error("Failed to share image");
+    } finally {
+      setIsSharing(false);
+    }
   };
 
   const handleDownload = () => {
@@ -301,13 +356,22 @@ export default function Home() {
               )}
             </div>
 
-            <Button 
-              onClick={handleDownload} 
-              disabled={!maskedImage} 
-              className="bg-red-800 text-white hover:bg-red-900 transition-all disabled:bg-zinc-800 disabled:text-zinc-500 w-full md:w-auto px-8"
-            >
-              {maskedImage ? "Download Masked Image" : "Waiting for image..."}
-            </Button>
+                <div className="flex gap-2 w-full">
+              <Button 
+                onClick={handleDownload} 
+                disabled={!maskedImage} 
+                className="bg-red-800 text-white hover:bg-red-900 transition-all disabled:bg-zinc-800 disabled:text-zinc-500 flex-1"
+              >
+                {maskedImage ? "Download Masked Image" : "Waiting for image..."}
+              </Button>
+              <Button 
+                onClick={handleShare} 
+                disabled={!maskedImage || isSharing}
+                className="bg-blue-600 text-white hover:bg-blue-700 transition-all disabled:bg-zinc-800 disabled:text-zinc-500 flex-1"
+              >
+                {isSharing ? "Sharing..." : "Share"}
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </div>
