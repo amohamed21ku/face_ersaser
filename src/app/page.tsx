@@ -306,7 +306,7 @@ export default function Home() {
               disabled={!maskedImage} 
               className="bg-red-800 text-white hover:bg-red-900 transition-all disabled:bg-zinc-800 disabled:text-zinc-500 w-full md:w-auto px-8"
             >
-              {maskedImage ? "Download Masked Image" : "Waiting for image..."}
+              {maskedImage ? "Download Masked Image" : "Waiting for image1..."}
             </Button>
           </CardContent>
         </Card>
