@@ -5,6 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import * as faceapi from 'face-api.js';
+import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
+import { collection, addDoc, serverTimestamp } from "firebase/firestore";
+import { storage, db } from "@/lib/firebase"; // adjust path if needed
 import { motion } from "framer-motion";
 
 export async function loadModels() {
@@ -13,23 +16,23 @@ export async function loadModels() {
   await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
 }
 
-function eraseRegionSmart(ctx: CanvasRenderingContext2D, points: faceapi.Point[], scaleFactor: number = 1) {
+function eraseRegionSmart(
+  ctx: CanvasRenderingContext2D,
+  points: faceapi.Point[],
+  scaleFactor: number = 1,
+  fillColor: string = "black" // default to black
+) {
   if (!points || points.length < 2) return;
 
   ctx.save();
-  ctx.globalCompositeOperation = 'destination-out';
   ctx.beginPath();
   ctx.moveTo(points[0].x, points[0].y);
-
   for (let i = 1; i < points.length; i++) {
     ctx.lineTo(points[i].x, points[i].y);
   }
-
   ctx.closePath();
-  ctx.lineWidth = 2 * scaleFactor;
-  ctx.stroke();
+  ctx.fillStyle = fillColor;
   ctx.fill();
-
   ctx.restore();
 }
 
@@ -66,6 +69,7 @@ export async function applyGreyFaceMask(image: HTMLImageElement): Promise<{ canv
   const avgB = Math.round(bSum / cheekPoints.length);
   const skinColorString = `rgb(${avgR}, ${avgG}, ${avgB})`;
 
+  // Step 2: Draw mask with skin tone
   const jaw = lm.getJawOutline();
   const leftBrow = lm.getLeftEyeBrow().map(p => ({ x: p.x, y: p.y - 60 }));
   const rightBrow = lm.getRightEyeBrow().map(p => ({ x: p.x, y: p.y - 60 }));
@@ -82,14 +86,18 @@ export async function applyGreyFaceMask(image: HTMLImageElement): Promise<{ canv
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.restore();
 
-  const mergePoints = (a: faceapi.Point[], b: faceapi.Point[]) => [...a, ...b.reverse()];
+  const mergePoints = (a: faceapi.Point[], b: faceapi.Point[]) => {
+    return [...a, ...b.reverse()];
+  };
+
   const leftEyeRegion = mergePoints(lm.getLeftEye(), lm.getLeftEyeBrow());
   const rightEyeRegion = mergePoints(lm.getRightEye(), lm.getRightEyeBrow());
+  eraseRegionSmart(ctx, leftEyeRegion, 1.5, "black");
+  eraseRegionSmart(ctx, rightEyeRegion, 1.5, "black");
+  eraseRegionSmart(ctx, lm.getNose(), 1.4, "black");
+  eraseRegionSmart(ctx, lm.getMouth(), 1.5, "black");
 
-  eraseRegionSmart(ctx, leftEyeRegion, 1.5);
-  eraseRegionSmart(ctx, rightEyeRegion, 1.5);
-  eraseRegionSmart(ctx, lm.getNose(), 1.4);
-  eraseRegionSmart(ctx, lm.getMouth(), 1.5);
+
 
   return { canvas, skinColor: skinColorString };
 }
@@ -98,10 +106,17 @@ const skinToneGrey = "#D3D3D3";
 
 export default function Home() {
   const [image, setImage] = useState<string | null>(null);
+  const [bwImage, setBwImage] = useState<string | null>(null);
+  const [brushSize, setBrushSize] = useState<number>(10);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
   const [maskedImage, setMaskedImage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [drawing, setDrawing] = useState(false);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [overlayImage, setOverlayImage] = useState<string | null>(null);
   const [skinColor, setSkinColor] = useState<string>(skinToneGrey);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null); // upload progress
 
   useEffect(() => {
     const load = async () => {
@@ -160,6 +175,54 @@ export default function Home() {
     };
     reader.readAsDataURL(file);
   };
+  const handleShare = async () => {
+    if (!maskedImage) return;
+  
+    const fileName = `masked_faces/${Date.now()}.png`;
+    const imageRef = ref(storage, fileName);
+  
+    try {
+      // Convert the data URL to a Blob
+      const response = await fetch(maskedImage);
+      const blob = await response.blob();
+  
+      // Upload the Blob using uploadBytesResumable
+      const uploadTask = uploadBytesResumable(imageRef, blob);
+  
+      // Monitor the upload progress
+      uploadTask.on('state_changed',
+        (snapshot) => {
+          // Get task progress, including the number of bytes uploaded and the total number of bytes to be uploaded
+          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+          setUploadProgress(progress);
+          console.log('Upload is ' + progress + '% done');
+        },
+        (error) => {
+          // Handle unsuccessful uploads
+          console.error("Upload failed:", error);
+          setUploadProgress(null);
+          alert("Upload failed. Please try again.");
+        },
+        async () => {
+          // Handle successful uploads on complete
+          const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+          await addDoc(collection(db, "images"), {
+            image_url: downloadURL,
+            created_at: serverTimestamp(),
+          });
+  
+          setUploadProgress(null);
+          alert("Image shared successfully!");
+          window.location.href = "/gallery"; // Make sure this route exists
+        }
+      );
+    } catch (err) {
+      console.error("Sharing failed:", err);
+      setUploadProgress(null);
+      alert("Failed to share the image. Please try again.");
+    }
+  };
+  
 
   const handleDownload = () => {
     if (!maskedImage) {
@@ -174,6 +237,99 @@ export default function Home() {
     a.click();
     document.body.removeChild(a);
   };
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    setDrawing(true);
+    const canvas = overlayCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.lineWidth = brushSize;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = skinColor;
+
+    const x = e.nativeEvent.offsetX;
+    const y = e.nativeEvent.offsetY;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+  };
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!drawing) return;
+    const canvas = overlayCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const x = e.nativeEvent.offsetX;
+    const y = e.nativeEvent.offsetY;
+    ctx.lineTo(x, y);
+    ctx.stroke();
+    setOverlayImage(canvas.toDataURL('image/png'));
+  };
+
+  const handleMouseUp = () => {
+    setDrawing(false);
+  };
+
+  const handleMouseLeave = () => {
+    setDrawing(false);
+  };
+  const capturePhotoDirectly = async () => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      alert("Camera not supported on this device");
+      return;
+    }
+  
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      const video = document.createElement("video");
+      video.srcObject = stream;
+      await video.play();
+  
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  
+      // Stop camera after capture
+      stream.getTracks().forEach(track => track.stop());
+  
+      const dataUrl = canvas.toDataURL("image/png");
+      setImage(dataUrl);
+  
+      const img = new Image();
+      img.src = dataUrl;
+      img.onload = async () => {
+        setIsLoading(true);
+        try {
+          const { canvas, skinColor } = await applyGreyFaceMask(img);
+          setMaskedImage(canvas.toDataURL("image/png"));
+          setSkinColor(skinColor);
+          if (overlayCanvasRef.current) {
+            const overlayCtx = overlayCanvasRef.current.getContext("2d");
+            if (overlayCtx) {
+              overlayCanvasRef.current.width = canvas.width;
+              overlayCanvasRef.current.height = canvas.height;
+              drawOverlayText(overlayCanvasRef.current);
+            }
+          }
+        } catch (err: any) {
+          alert(`Face detection failed: ${err.message}`);
+          console.error(err);
+          setMaskedImage(null);
+        } finally {
+          setIsLoading(false);
+        }
+      };
+    } catch (err) {
+      alert("Could not access the camera.");
+      console.error("Camera error:", err);
+    }
+  };
+  
 
   function drawOverlayText(canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d');
@@ -227,7 +383,7 @@ export default function Home() {
         <motion.div 
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ delay: 0.8, duration: 1 }}
+          transition={{ duration: 1 }}
           className="w-16 h-1 bg-red-700 mb-6"
         />
 
@@ -257,6 +413,10 @@ export default function Home() {
               />
               <div className="absolute inset-0 bg-gradient-to-r from-transparent via-red-900/10 to-transparent opacity-30 pointer-events-none"></div>
             </div>
+
+            <Button onClick={capturePhotoDirectly} className="bg-red-700 text-white hover:bg-red-800 w-full">
+              Take a Photo
+            </Button>
             
             <div className="w-full flex items-center justify-center relative min-h-64 border border-dashed border-zinc-700 rounded-lg p-4">
               {image ? (
@@ -300,14 +460,30 @@ export default function Home() {
                 </div>
               )}
             </div>
-
-            <Button 
-              onClick={handleDownload} 
-              disabled={!maskedImage} 
-              className="bg-red-800 text-white hover:bg-red-900 transition-all disabled:bg-zinc-800 disabled:text-zinc-500 w-full md:w-auto px-8"
-            >
-              {maskedImage ? "Download Masked Image" : "Waiting for image..."}
-            </Button>
+            {uploadProgress !== null && (
+              <div className="w-full bg-zinc-700 rounded-full overflow-hidden">
+                <div
+                  className="bg-red-700 h-2 transition-all"
+                  style={{ width: `${uploadProgress}%` }}
+                ></div>
+              </div>
+            )}
+            <div className="flex flex-col md:flex-row space-y-2 md:space-y-0 md:space-x-4 w-full">
+              <Button
+                onClick={handleDownload}
+                disabled={!maskedImage}
+                className="bg-red-800 text-white hover:bg-red-900 transition-all disabled:bg-zinc-800 disabled:text-zinc-500 w-full md:w-auto px-8"
+              >
+                Download
+              </Button>
+              <Button
+                onClick={handleShare}
+                disabled={!maskedImage}
+                className="bg-red-800 text-white hover:bg-red-900 transition-all disabled:bg-zinc-800 disabled:text-zinc-500 w-full md:w-auto px-8"
+              >
+                Be Part of the Image
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -346,4 +522,15 @@ export default function Home() {
       </div>
     </div>
   );
+}
+
+function drawOverlayText(canvas: HTMLCanvasElement) {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const text = "EVERYTHING WILL BE TAKEN AWAY";
+  ctx.font = "bold 28px Arial";
+  ctx.fillStyle = "darkred";
+  ctx.textAlign = "center";
+  ctx.fillText(text, canvas.width / 2, 40);
 }
